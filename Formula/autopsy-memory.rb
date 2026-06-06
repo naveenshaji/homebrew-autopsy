@@ -5,13 +5,13 @@ class AutopsyMemory < Formula
 
   desc "Local-first Falkor-backed memory layer and CLI for coding agents"
   homepage "https://github.com/naveenshaji/autopsy"
-  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.23.tar.gz"
-  sha256 "e883d044552e6355b9446de490d0dd72c412a7b6039a4038018d94daff53f84b"
+  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.25.tar.gz"
+  sha256 "66b625ba0f5ce2675b55c5a5c002504d5a728aad2b566726bfe5a2a54ebe1bc2"
   license "Apache-2.0"
 
   depends_on arch: :arm64
   depends_on "libyaml"
-  depends_on :macos
+  depends_on macos: :sonoma
   depends_on "openssl@3"
   depends_on "python@3.12"
 
@@ -250,8 +250,24 @@ class AutopsyMemory < Formula
     sha256 "53aa98e66dc52cf4d95628d1144ab4f3233cadf951faf81e76d5a7c44483541a"
   end
 
+  def autopsy_python
+    Formula["python@3.12"].opt_bin/"python3.12"
+  end
+
+  def validate_autopsy_python!
+    odie "python@3.12 executable was not found at #{autopsy_python}" unless autopsy_python.exist?
+
+    version = Utils.safe_popen_read(
+      autopsy_python,
+      "-c",
+      "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    ).strip
+    message = "Autopsy requires Homebrew python@3.12, but #{autopsy_python} reports Python #{version}"
+    odie message if version != "3.12"
+  end
+
   def autopsy_pip_install(target)
-    system Formula["python@3.12"].opt_bin/"python3.12", "-m", "pip",
+    system autopsy_python, "-m", "pip",
            "--python=#{libexec}/bin/python", "install",
            "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
            target
@@ -265,7 +281,8 @@ class AutopsyMemory < Formula
   end
 
   def install
-    venv = virtualenv_create(libexec, "python3.12", system_site_packages: true, without_pip: true)
+    validate_autopsy_python!
+    venv = virtualenv_create(libexec, autopsy_python, system_site_packages: true, without_pip: true)
     resources.each do |resource|
       next if resource.name == "falkordb-macos-arm64v8"
 
@@ -304,18 +321,43 @@ class AutopsyMemory < Formula
       To install agent instructions and start the macOS menu bar utility:
         autopsy install
 
+      To verify the local runtime after setup:
+        autopsy install --smoke-test
+
       To stop only the menu bar utility:
         autopsy menubar --uninstall-launch-agent
     EOS
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/autopsy version")
-    system bin/"autopsy", "version", "--json"
-    system bin/"autopsy", "doctor"
+    with_env(PATH: "#{bin}:#{ENV.fetch("PATH", "")}") do
+      assert_match version.to_s, shell_output("#{bin}/autopsy version")
+      system bin/"autopsy", "version", "--json"
+      system bin/"autopsy", "doctor"
 
-    menubar_paths = JSON.parse(shell_output("#{bin}/autopsy menubar --print-path"))
-    assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
-    assert menubar_paths["app_bundle_current"], "expected current menu bar app bundle"
+      install_payload = JSON.parse(
+        shell_output("#{bin}/autopsy install --dry-run --skip-menubar --smoke-test --skip-write-smoke"),
+      )
+      assert install_payload.dig("workflow", "complete"), "expected dry-run install workflow to complete"
+      if install_payload["smoke_test"]
+        assert install_payload.dig("smoke_test", "reason") == "dry_run", "expected dry-run smoke test skip"
+      end
+
+      with_env(
+        AUTOPSY_APP_SUPPORT_DIR:     (testpath/"empty-app-support").to_s,
+        AUTOPSY_UNIFIED_MEMORY_ROOT: (testpath/"empty-root").to_s,
+      ) do
+        empty_status = JSON.parse(shell_output("#{bin}/autopsy status --current-only --limit 1 --section-limit 1"))
+        assert_equal "No memory has been written yet.", empty_status.dig("status", "summary")
+        assert_equal "empty", empty_status.dig("workflow", "status")
+        refute empty_status.dig("workflow", "complete"), "expected empty status workflow to be incomplete"
+        assert_equal "write_memory", empty_status.dig("workflow", "next_step")
+        assert empty_status.dig("onboarding", "empty"), "expected fresh status onboarding"
+      end
+
+      menubar_paths = JSON.parse(shell_output("#{bin}/autopsy menubar --print-path"))
+      assert menubar_paths["app_bundle_exists"], "expected prebuilt menu bar app bundle"
+      assert menubar_paths["app_bundle_current"], "expected current menu bar app bundle"
+    end
   end
 end
