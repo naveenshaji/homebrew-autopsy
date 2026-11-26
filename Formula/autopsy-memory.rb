@@ -5,8 +5,8 @@ class AutopsyMemory < Formula
 
   desc "Local-first Falkor-backed memory layer and CLI for coding agents"
   homepage "https://github.com/naveenshaji/autopsy"
-  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.36.tar.gz"
-  sha256 "b7c45c88aa5dcb7f93dd38dae2c6b53765bc5b8ba54f1981c0458becf1192c78"
+  url "https://github.com/naveenshaji/autopsy/archive/refs/tags/v0.1.37.tar.gz"
+  sha256 "78cd0fbf8076c5956eafe21d4c3e5f62057fc1914b24b2006710fc51b3902a8b"
   license "Apache-2.0"
 
   depends_on arch: :arm64
@@ -254,7 +254,14 @@ class AutopsyMemory < Formula
     formula_opt_bin("python@3.12")/"python3.12"
   end
 
-  def validate_autopsy_python!
+  def autopsy_resource_target
+    wheel = Dir["*.whl"].first
+    return Pathname.pwd/wheel if wheel
+
+    Pathname.pwd
+  end
+
+  def install
     odie "python@3.12 executable was not found at #{autopsy_python}" unless autopsy_python.exist?
 
     version = Utils.safe_popen_read(
@@ -264,30 +271,16 @@ class AutopsyMemory < Formula
     ).strip
     message = "Autopsy requires Homebrew python@3.12, but #{autopsy_python} reports Python #{version}"
     odie message if version != "3.12"
-  end
 
-  def autopsy_pip_install(target)
-    system autopsy_python, "-m", "pip",
-           "--python=#{libexec}/bin/python", "install",
-           "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
-           target
-  end
-
-  def autopsy_resource_target
-    wheel = Dir["*.whl"].first
-    return Pathname.pwd/wheel if wheel
-
-    Pathname.pwd
-  end
-
-  def install
-    validate_autopsy_python!
     venv = virtualenv_create(libexec, autopsy_python, system_site_packages: true, without_pip: true)
     resources.each do |resource|
       next if resource.name == "falkordb-macos-arm64v8"
 
       resource.stage do
-        autopsy_pip_install autopsy_resource_target
+        system autopsy_python, "-m", "pip",
+               "--python=#{libexec}/bin/python", "install",
+               "--verbose", "--no-deps", "--ignore-installed", "--no-compile",
+               autopsy_resource_target
       end
     end
     venv.pip_install_and_link buildpath
